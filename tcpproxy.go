@@ -70,20 +70,26 @@ func echoServerHandler(conn net.Conn) {
     conn.Close()
 }
 
-func copyToSocket(read_conn, write_conn net.Conn, joinchan chan error) {
+func copyToSocket(name string, read_conn, write_conn net.Conn, joinchan chan error) {
     // Read from read_conn. If anything is read, write it to write_conn.
     for {
         // Make a buffer to hold incoming data.
         buf := make([]byte, 1024)
         // Read the incoming connection into the buffer.
         req_len, err := read_conn.Read(buf)
-        log.Debugf("received %d bytes", req_len)
+        log.Debugf("%s: received %d bytes", name, req_len)
         if err != nil {
-            log.Errorf("Error reading: %s", err)
+            log.Errorf("%s: Error reading: %s", name, err)
             joinchan <- err
             return
         }
-        write_conn.Write(buf)
+        if nbytes, err := write_conn.Write(buf[:req_len]); err != nil {
+            log.Errorf("%s: Error writing: %s", name, err)
+            joinchan <- err
+            return
+        } else {
+            log.Debugf("%s: wrote %d bytes", name, nbytes)
+        }
     }
 }
 
@@ -93,7 +99,7 @@ func proxyHandler(listen_conn net.Conn,
     log.Infof("setting up proxy to %s:%s", remotehost, remoteport)
     defer listen_conn.Close()
     tcpAddr, err := net.ResolveTCPAddr("tcp",
-                                       fmt.Sprintf("%s:%d",
+                                       fmt.Sprintf("%s:%s",
                                                    remotehost,
                                                    remoteport))
     if err != nil {
@@ -110,8 +116,8 @@ func proxyHandler(listen_conn net.Conn,
         defer remote_conn.Close()
         copy_joinchan := make(chan error)
         // Start two goroutines for non-blocking I/O in both directions
-        go copyToSocket(listen_conn, remote_conn, copy_joinchan)
-        go copyToSocket(remote_conn, listen_conn, copy_joinchan)
+        go copyToSocket("local", listen_conn, remote_conn, copy_joinchan)
+        go copyToSocket("remote", remote_conn, listen_conn, copy_joinchan)
         // And block on the join channel. If one end quits, then we're
         // done.
         err := <- copy_joinchan
