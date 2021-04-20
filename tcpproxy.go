@@ -70,6 +70,23 @@ func echoServerHandler(conn net.Conn) {
     conn.Close()
 }
 
+func copyToSocket(read_conn, write_conn net.Conn, joinchan chan error) {
+    // Read from read_conn. If anything is read, write it to write_conn.
+    for {
+        // Make a buffer to hold incoming data.
+        buf := make([]byte, 1024)
+        // Read the incoming connection into the buffer.
+        req_len, err := read_conn.Read(buf)
+        log.Debugf("received %d bytes", req_len)
+        if err != nil {
+            log.Errorf("Error reading: %s", err)
+            joinchan <- err
+            return
+        }
+        write_conn.Write(buf)
+    }
+}
+
 func proxyHandler(listen_conn net.Conn,
                   remotehost, remoteport string,
                   joinchan chan error) {
@@ -91,28 +108,18 @@ func proxyHandler(listen_conn net.Conn,
     } else {
         log.Infof("connected")
         defer remote_conn.Close()
-        for {
-            // Make a buffer to hold incoming data.
-            buf := make([]byte, 1024)
-            // Read the incoming connection into the buffer.
-            reqLen, err := listen_conn.Read(buf)
-            log.Debugf("received %d bytes", reqLen)
-            if err != nil {
-                log.Error("Error reading:", err.Error())
-                joinchan <- err
-                return
-            }
-            remote_conn.Write(buf)
-            time.Sleep(time.Duration(1) * time.Second)
-            reply := make([]byte, 1024)
-            _, err = remote_conn.Read(reply)
-            if err != nil {
-                log.Errorf("socket error: %s", err)
-                joinchan <- err
-                return
-            }
-            log.Info("received from server: [%s]\n", string(reply))
-        }
+        copy_joinchan := make(chan error)
+        // Start two goroutines for non-blocking I/O in both directions
+        go copyToSocket(listen_conn, remote_conn, copy_joinchan)
+        go copyToSocket(remote_conn, listen_conn, copy_joinchan)
+        // And block on the join channel. If one end quits, then we're
+        // done.
+        err := <- copy_joinchan
+        // FIXME: shut down the other goroutine
+        log.Errorf("one end of the connection dropped: %s", err)
+        // FIXME: identify which end dropped - separate channels?
+        joinchan <- err
+        return
     }
 }
 
