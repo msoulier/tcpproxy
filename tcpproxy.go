@@ -114,18 +114,23 @@ func proxyHandler(listen_conn net.Conn,
     } else {
         log.Infof("connected")
         defer remote_conn.Close()
-        copy_joinchan := make(chan error)
+        local_joinchan := make(chan error)
+        remote_joinchan := make(chan error)
         // Start two goroutines for non-blocking I/O in both directions
-        go copyToSocket("local", listen_conn, remote_conn, copy_joinchan)
-        go copyToSocket("remote", remote_conn, listen_conn, copy_joinchan)
-        // And block on the join channel. If one end quits, then we're
+        go copyToSocket("local", listen_conn, remote_conn, local_joinchan)
+        go copyToSocket("remote", remote_conn, listen_conn, remote_joinchan)
+        // And block on the join channels. If one end quits, then we're
         // done.
-        err := <- copy_joinchan
-        // FIXME: shut down the other goroutine
-        log.Errorf("one end of the connection dropped: %s", err)
-        // FIXME: identify which end dropped - separate channels?
-        joinchan <- err
-        return
+        select {
+            case err := <- local_joinchan:
+                log.Errorf("local end of socket dropped")
+                joinchan <- err
+                return
+            case err := <- remote_joinchan:
+                log.Errorf("remote end of socket dropped")
+                joinchan <- err
+                return
+        }
     }
 }
 
