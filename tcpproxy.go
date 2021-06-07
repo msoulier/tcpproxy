@@ -9,7 +9,6 @@ import (
     "github.com/jessevdk/go-flags"
     "strings"
     "time"
-    "errors"
 )
 
 var (
@@ -159,10 +158,17 @@ func initialProxyHandler(listenport, remotehost, remoteport string,
         // Listen for an incoming connection.
         new_listenconn, err := tcplistener.Accept()
         if err != nil {
-            if errors.Is(err, os.ErrDeadlineExceeded) {
-                log.Debug("timeout on Accept")
+            // Cast to a net.OpError to get the specifics
+            if opErr, ok := err.(*net.OpError); ok {
+                if opErr.Timeout() {
+                    log.Debug("timeout on Accept")
+                } else {
+                    log.Errorf("Not a timeout: %s", opErr.Error())
+                    joinchan <- err
+                    return
+                }
             } else {
-                log.Errorf("Error accepting: %s", err.Error())
+                log.Errorf("Not an OpError: %s", err.Error())
                 joinchan <- err
                 return
             }
